@@ -2660,15 +2660,14 @@ static void gcode_G28(bool home_x_axis, long home_x_value, bool home_y_axis, lon
 static void gcode_G28(bool home_x_axis, long home_x_value, bool home_y_axis, long home_y_value, bool home_z_axis, long home_z_value, bool without_mbl)
 #endif //TMC2130
 {
+	// Flag for the display update routine and to disable the print cancelation during homing.
 	st_synchronize();
+	homing_flag = true;
 
 #if 0
 	SERIAL_ECHOPGM("G28, initial ");  print_world_coordinates();
 	SERIAL_ECHOPGM("G28, initial ");  print_physical_coordinates();
 #endif
-
-	// Flag for the display update routine and to disable the print cancelation during homing.
-	homing_flag = true;
 
 	// Which axes should be homed?
 	bool home_x = home_x_axis;
@@ -2912,24 +2911,21 @@ static void gcode_G28(bool home_x_axis, long home_x_value, bool home_y_axis, lon
 
 #if (defined(MESH_BED_LEVELING) && !defined(MK1BP))
 	if (home_x_axis || home_y_axis || without_mbl || home_z_axis)
-		{
+    {
       if (! home_z && mbl_was_active) {
         // Re-enable the mesh bed leveling if only the X and Y axes were re-homed.
         mbl.active = true;
         // and re-adjust the current logical Z axis with the bed leveling offset applicable at the current XY position.
         current_position[Z_AXIS] -= mbl.get_z(st_get_position_mm(X_AXIS), st_get_position_mm(Y_AXIS));
       }
-		}
-	else
-		{
-			st_synchronize();
-			homing_flag = false;
-	  }
+    }
 #endif
 
 	  if (farm_mode) { prusa_statistics(20); };
 
+      st_synchronize();
 	  homing_flag = false;
+
 #if 0
       SERIAL_ECHOPGM("G28, final ");  print_world_coordinates();
       SERIAL_ECHOPGM("G28, final ");  print_physical_coordinates();
@@ -2950,6 +2946,10 @@ static void gcode_G28(bool home_x_axis, bool home_y_axis, bool home_z_axis)
 // G80 - Automatic mesh bed leveling
 static void gcode_G80()
 {
+    st_synchronize();
+    if (waiting_inside_plan_buffer_line_print_aborted)
+        return;
+
     mesh_bed_leveling_flag = true;
 #ifndef PINDA_THERMISTOR
     static bool run = false; // thermistor-less PINDA temperature compensation is running
@@ -3350,9 +3350,11 @@ static void gcode_G80()
     lcd_setstatuspgm(_T(WELCOME_MSG));
     custom_message_type = custom_message_type_old;
     custom_message_state = custom_message_state_old;
-    mesh_bed_leveling_flag = false;
     mesh_bed_run_from_menu = false;
     lcd_update(2);
+
+    st_synchronize();
+    mesh_bed_leveling_flag = false;
 }
 
 
@@ -3961,6 +3963,8 @@ static void extended_capabilities_report()
 #endif //FANCHECK and TACH_0 or TACH_1
     // AUTOREPORT_POSITION (M114)
     cap_line(PSTR("AUTOREPORT_POSITION"), ENABLED(AUTO_REPORT));
+    // EXTENDED_M20 (support for L and T parameters)
+    cap_line(PSTR("EXTENDED_M20"), 1);
     //@todo Update RepRap cap
 }
 #endif //EXTENDED_CAPABILITIES_REPORT
@@ -5145,8 +5149,9 @@ if(eSoundMode!=e_SOUND_MODE_SILENT)
     */
     case 30: 
         {
-            homing_flag = true;
             st_synchronize();
+            homing_flag = true;
+
             // TODO: make sure the bed_level_rotation_matrix is identity or the planner will get set incorectly
             int l_feedmultiply = setup_for_endstop_move();
 
@@ -5249,7 +5254,9 @@ if(eSoundMode!=e_SOUND_MODE_SILENT)
             }
         }
 
+        st_synchronize();
         homing_flag = true; // keep homing on to avoid babystepping while the LCD is enabled
+
         lcd_update_enable(true);
         KEEPALIVE_STATE(NOT_BUSY); //no need to print busy messages as we print current temperatures periodicaly
         SERIAL_ECHOLNPGM("PINDA probe calibration start");
@@ -5734,16 +5741,17 @@ if(eSoundMode!=e_SOUND_MODE_SILENT)
 	### M20 - SD Card file list <a href="https://reprap.org/wiki/G-code#M20:_List_SD_card">M20: List SD card</a>
     #### Usage
     
-        M20 [ L ]
+        M20 [ L | T ]
     #### Parameters
-    - `L` - Reports ling filenames instead of just short filenames. Requires host software parsing.
+    - `T` - Report timestamps as well. The value is one uint32_t encoded as hex. Requires host software parsing (Cap:EXTENDED_M20).
+    - `L` - Reports long filenames instead of just short filenames. Requires host software parsing (Cap:EXTENDED_M20).
     */
     case 20:
       KEEPALIVE_STATE(NOT_BUSY); // do not send busy messages during listing. Inhibits the output of manage_heater()
       SERIAL_PROTOCOLLNRPGM(_N("Begin file list"));////MSG_BEGIN_FILE_LIST
-      card.ls(code_seen('L'));
+      card.ls(CardReader::ls_param(code_seen('L'), code_seen('T')));
       SERIAL_PROTOCOLLNRPGM(_N("End file list"));////MSG_END_FILE_LIST
-      break;
+    break;
 
     /*!
 	### M21 - Init SD card <a href="https://reprap.org/wiki/G-code#M21:_Initialize_SD_card">M21: Initialize SD card</a>
